@@ -65,6 +65,8 @@ class ASRModel(torch.nn.Module):
             smoothing=lsm_weight,
             normalize_length=length_normalized_loss,
         )
+        if self.ctc.jpl:
+            assert self.ctc_weight > 0.0, "jpl requires CTC module to be trained."
 
     def forward(
         self,
@@ -90,19 +92,20 @@ class ASRModel(torch.nn.Module):
         encoder_out, encoder_mask = self.encoder(speech, speech_lengths)
         encoder_out_lens = encoder_mask.squeeze(1).sum(1)
 
-        # 2a. Attention-decoder branch
-        if self.ctc_weight != 1.0:
-            loss_att, acc_att = self._calc_att_loss(encoder_out, encoder_mask,
-                                                    text, text_lengths)
-        else:
-            loss_att = None
-
-        # 2b. CTC branch
+        # 2a. CTC branch
         if self.ctc_weight != 0.0:
-            loss_ctc = self.ctc(encoder_out, encoder_out_lens, text,
-                                text_lengths)
+            loss_ctc, loss_att_mask, _, text, text_lengths = \
+                self.ctc(encoder_out, encoder_out_lens, text, text_lengths)
         else:
             loss_ctc = None
+            loss_att_mask = torch.ones(0, device=text.device)  # dummy tensor
+
+        # 2b. Attention-decoder branch
+        if self.ctc_weight != 1.0:
+            loss_att, acc_att = self._calc_att_loss(encoder_out, encoder_mask,
+                                                    text, text_lengths, loss_att_mask)
+        else:
+            loss_att = None
 
         if loss_ctc is None:
             loss = loss_att
@@ -119,6 +122,7 @@ class ASRModel(torch.nn.Module):
         encoder_mask: torch.Tensor,
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
+        loss_att_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, float]:
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos,
                                             self.ignore_id)
@@ -134,10 +138,11 @@ class ASRModel(torch.nn.Module):
                                                      r_ys_in_pad,
                                                      self.reverse_weight)
         # 2. Compute attention loss
-        loss_att = self.criterion_att(decoder_out, ys_out_pad)
+        loss_att = self.criterion_att(decoder_out, ys_out_pad, loss_att_mask)
         r_loss_att = torch.tensor(0.0)
         if self.reverse_weight > 0.0:
-            r_loss_att = self.criterion_att(r_decoder_out, r_ys_out_pad)
+            r_loss_att = self.criterion_att(r_decoder_out, r_ys_out_pad,
+                                            loss_att_mask)
         loss_att = loss_att * (
             1 - self.reverse_weight) + r_loss_att * self.reverse_weight
         acc_att = th_accuracy(

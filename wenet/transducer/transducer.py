@@ -61,6 +61,8 @@ class Transducer(ASRModel):
                 smoothing=lsm_weight,
                 normalize_length=length_normalized_loss,
             )
+        if self.ctc.jpl:
+            assert self.ctc_weight > 0.0, "jpl requires CTC module to be trained."
 
     def forward(
         self,
@@ -86,6 +88,16 @@ class Transducer(ASRModel):
         # Encoder
         encoder_out, encoder_mask = self.encoder(speech, speech_lengths)
         encoder_out_lens = encoder_mask.squeeze(1).sum(1)
+        # optional ctc
+        loss_ctc: Optional[torch.Tensor] = None
+        if self.ctc_weight != 0.0 and self.ctc is not None:
+            loss_ctc, loss_att_mask, loss_rnnt_mask, text, text_lengths = \
+                self.ctc(encoder_out, encoder_out_lens, text, text_lengths)
+        else:
+            loss_ctc = None
+            loss_att_mask = torch.ones(0, device=text.device)  # dummy tensor
+            loss_rnnt_mask = torch.ones(0, device=text.device)  # dummy tensor
+
         # predictor
         ys_in_pad = add_blank(text, self.blank, self.ignore_id)
         predictor_out = self.predictor(ys_in_pad)
@@ -103,7 +115,10 @@ class Transducer(ASRModel):
                                                encoder_out_lens,
                                                rnnt_text_lengths,
                                                blank=self.blank,
-                                               reduction="mean")
+                                               reduction="none")
+        if self.training and self.ctc.jpl:
+            loss *= loss_rnnt_mask  # (B)
+        loss = loss.sum()
         loss_rnnt = loss
 
         loss = self.transducer_weight * loss
@@ -111,15 +126,7 @@ class Transducer(ASRModel):
         loss_att: Optional[torch.Tensor] = None
         if self.attention_decoder_weight != 0.0 and self.decoder is not None:
             loss_att, _ = self._calc_att_loss(encoder_out, encoder_mask, text,
-                                              text_lengths)
-
-        # optional ctc
-        loss_ctc: Optional[torch.Tensor] = None
-        if self.ctc_weight != 0.0 and self.ctc is not None:
-            loss_ctc = self.ctc(encoder_out, encoder_out_lens, text,
-                                text_lengths)
-        else:
-            loss_ctc = None
+                                              text_lengths, loss_att_mask)
 
         if loss_ctc is not None:
             loss = loss + self.ctc_weight * loss_ctc.sum()

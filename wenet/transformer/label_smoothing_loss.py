@@ -55,7 +55,8 @@ class LabelSmoothingLoss(nn.Module):
                  size: int,
                  padding_idx: int,
                  smoothing: float,
-                 normalize_length: bool = False):
+                 normalize_length: bool = False,
+                 use_mask: bool = False):
         """Construct an LabelSmoothingLoss object."""
         super(LabelSmoothingLoss, self).__init__()
         self.criterion = nn.KLDivLoss(reduction="none")
@@ -65,7 +66,8 @@ class LabelSmoothingLoss(nn.Module):
         self.size = size
         self.normalize_length = normalize_length
 
-    def forward(self, x: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, target: torch.Tensor,
+                loss_mask: torch.Tensor = torch.ones(0)) -> torch.Tensor:
         """Compute loss between x and target.
 
         The model outputs and data labels tensors are flatten to
@@ -76,13 +78,15 @@ class LabelSmoothingLoss(nn.Module):
             x (torch.Tensor): prediction (batch, seqlen, class)
             target (torch.Tensor):
                 target signal masked with self.padding_id (batch, seqlen)
+            mask (torch.Tensor):
+                loss masks (batch)
         Returns:
             loss (torch.Tensor) : The KL loss, scalar float value
         """
         assert x.size(2) == self.size
         batch_size = x.size(0)
-        x = x.view(-1, self.size)
-        target = target.view(-1)
+        x = x.view(-1, self.size)  #
+        target = target.view(-1)  # (B,T)
         # use zeros_like instead of torch.no_grad() for true_dist,
         # since no_grad() can not be exported by JIT
         true_dist = torch.zeros_like(x)
@@ -93,4 +97,8 @@ class LabelSmoothingLoss(nn.Module):
         true_dist.scatter_(1, target.unsqueeze(1), self.confidence)
         kl = self.criterion(torch.log_softmax(x, dim=1), true_dist)
         denom = total if self.normalize_length else batch_size
-        return kl.masked_fill(ignore.unsqueeze(1), 0).sum() / denom
+        loss = kl.masked_fill(ignore.unsqueeze(1), 0)  # (B,)
+        if loss_mask.shape[0] > 0:
+            loss = loss.view(batch_size, -1, self.size)
+            loss *= loss_mask.view(batch_size, 1, 1)
+        return loss.sum() / denom

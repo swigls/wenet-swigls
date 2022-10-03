@@ -156,7 +156,9 @@ def filter(data,
            token_max_length=200,
            token_min_length=1,
            min_output_input_ratio=0.0005,
-           max_output_input_ratio=1):
+           max_output_input_ratio=1,
+           jpl=False,
+           max_length_jpl=3000):
     """ Filter sample according to feature and label length
         Inplace operation.
 
@@ -173,6 +175,9 @@ def filter(data,
                 token_length / feats_length(10ms)
             max_output_input_ratio: maximum ration of
                 token_length / feats_length(10ms)
+            jpl: to use JPL(joint pseudo label) for unlabeled utterances
+            max_length_jpl: drop unlabeled utterance which is greater 
+                            than max_length_jpl(10ms)
 
         Returns:
             Iterable[{key, wav, label, sample_rate}]
@@ -183,19 +188,23 @@ def filter(data,
         assert 'label' in sample
         # sample['wav'] is torch.Tensor, we have 100 frames every second
         num_frames = sample['wav'].size(1) / sample['sample_rate'] * 100
-        if num_frames < min_length:
-            continue
-        if num_frames > max_length:
-            continue
-        if len(sample['label']) < token_min_length:
-            continue
-        if len(sample['label']) > token_max_length:
-            continue
-        if num_frames != 0:
-            if len(sample['label']) / num_frames < min_output_input_ratio:
+        if jpl:
+            if num_frames > max_length_jpl:
                 continue
-            if len(sample['label']) / num_frames > max_output_input_ratio:
+        else:
+            if num_frames < min_length:
                 continue
+            if num_frames > max_length:
+                continue
+            if len(sample['label']) < token_min_length:
+                continue
+            if len(sample['label']) > token_max_length:
+                continue
+            if num_frames != 0:
+                if len(sample['label']) / num_frames < min_output_input_ratio:
+                    continue
+                if len(sample['label']) / num_frames > max_output_input_ratio:
+                    continue
         yield sample
 
 

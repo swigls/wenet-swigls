@@ -24,7 +24,6 @@ from wenet.transformer.decoder import BiTransformerDecoder, TransformerDecoder
 from wenet.transformer.encoder import ConformerEncoder, TransformerEncoder
 from wenet.utils.cmvn import load_cmvn
 
-
 def init_model(configs):
     if configs['cmvn_file'] is not None:
         mean, istd = load_cmvn(configs['cmvn_file'], configs['is_json_cmvn'])
@@ -56,7 +55,10 @@ def init_model(configs):
         assert configs['decoder_conf']['r_num_blocks'] > 0
         decoder = BiTransformerDecoder(vocab_size, encoder.output_size(),
                                        **configs['decoder_conf'])
-    ctc = CTC(vocab_size, encoder.output_size())
+
+    jpl = configs.get('jpl', False)
+    jpl_conf = configs['jpl_conf'] if jpl else {}
+    ctc = CTC(vocab_size, encoder.output_size(), jpl=jpl, jpl_conf=jpl_conf)
 
     # Init joint CTC/Attention or Transducer model
     if 'predictor' in configs:
